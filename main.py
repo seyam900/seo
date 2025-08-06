@@ -1,116 +1,136 @@
 import os
-import logging
 from dotenv import load_dotenv
-import openai
+from pytube import YouTube
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-    filters,
+    ApplicationBuilder, CommandHandler, MessageHandler,
+    CallbackQueryHandler, ContextTypes, filters
 )
 
 load_dotenv()
-
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-openai.api_key = OPENAI_API_KEY
-
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
-)
-logger = logging.getLogger(__name__)
-
-def main_menu():
-    return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("📥 Download Video", callback_data="download")],
-            [InlineKeyboardButton("🎯 Topic Ideas", callback_data="topic")],
-        ]
-    )
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+# ✅ Channel Verification
+async def is_subscriber(user_id, context):
     try:
         member = await context.bot.get_chat_member(chat_id=f"@{CHANNEL_USERNAME}", user_id=user_id)
-        if member.status not in ["member", "creator", "administrator"]:
-            raise Exception("User not a member")
-    except Exception:
-        join_button = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("🔐 Join Channel", url=f"https://t.me/{CHANNEL_USERNAME}")]]
-        )
+        return member.status in ["member", "creator", "administrator"]
+    except:
+        return False
+
+
+# ✅ Menu
+def main_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📌 Title", callback_data='get_title')],
+        [InlineKeyboardButton("🏷️ Tags", callback_data='get_tags')],
+        [InlineKeyboardButton("🔖 Hashtags", callback_data='get_hashtags')],
+        [InlineKeyboardButton("🎯 Topic Ideas", callback_data='get_topics')]
+    ])
+
+
+# ✅ Start
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not await is_subscriber(user_id, context):
+        btn = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔐 Join Channel", url=f"https://t.me/{CHANNEL_USERNAME}")]
+        ])
         await update.message.reply_text(
-            "🔒 Please join our channel to use this bot.",
-            reply_markup=join_button,
+            "🔒 Access Denied!\n\nJoin our channel to use this premium bot.",
+            reply_markup=btn
         )
         return
 
     await update.message.reply_text(
-        "👋 Welcome to the Premium Bot!\n\nChoose an option below:",
-        reply_markup=main_menu(),
+        "🥇 *Welcome to Premium YouTube Tool Bot!*\n\nChoose a feature below 👇",
+        parse_mode="Markdown",
+        reply_markup=main_menu()
     )
 
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ✅ Button Handler
+async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    context.user_data['action'] = query.data
+    if query.data == "get_topics":
+        await query.message.reply_text("🧠 Send a keyword or phrase to get topic ideas...")
+    else:
+        await query.message.reply_text("📥 Send the YouTube link...")
 
-    if query.data == "download":
-        await query.edit_message_text("📩 Send me a video link (YouTube Shorts, TikTok, Facebook)...")
-    elif query.data == "topic":
-        await query.edit_message_text("🧠 Send a keyword or phrase for topic suggestions...")
 
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
+# ✅ Handle Text
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-
-    try:
-        member = await context.bot.get_chat_member(chat_id=f"@{CHANNEL_USERNAME}", user_id=user_id)
-        if member.status not in ["member", "creator", "administrator"]:
-            await update.message.reply_text(f"🔒 Please join our channel first: https://t.me/{CHANNEL_USERNAME}")
-            return
-    except Exception:
-        await update.message.reply_text(f"🔒 Please join our channel first: https://t.me/{CHANNEL_USERNAME}")
+    if not await is_subscriber(user_id, context):
+        await update.message.reply_text("🚫 Join our channel first: https://t.me/" + CHANNEL_USERNAME)
         return
 
-    # Check if text looks like URL for download
-    if text.startswith("http"):
-        await update.message.reply_text("🚧 Download feature coming soon!", reply_markup=main_menu())
-        return
+    action = context.user_data.get('action')
+    msg = update.message.text
 
-    # Otherwise assume topic suggestion
-    await update.message.reply_text("⏳ Generating topic ideas... Please wait...")
-
-    prompt = f"Generate 5 catchy and highly searchable YouTube video titles based on this keyword or phrase: '{text}'. List them with bullet points."
-
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=250,
-            timeout=10,
-        )
-        result = response.choices[0].message.content
-        await update.message.reply_text(f"🎯 Topic Ideas:\n\n{result}", reply_markup=main_menu())
-    except Exception as e:
-        logger.error(f"OpenAI API error: {e}")
+    # Topic Ideas Section
+    if action == 'get_topics':
+        topics = [
+            f"{msg} tutorial for beginners",
+            f"{msg} explained in detail",
+            f"{msg} tips and tricks",
+            f"how to master {msg}",
+            f"{msg} 2025 trending guide"
+        ]
         await update.message.reply_text(
-            "⚠️ Sorry, there was an error fetching topic ideas. Please try again later.",
-            reply_markup=main_menu(),
+            "📊 *Topic Ideas:*\n" + "\n".join([f"• {t}" for t in topics]),
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔁 Back to Menu", callback_data='menu')]
+            ])
+        )
+        return
+
+    # YouTube Link Result Section
+    try:
+        yt = YouTube(msg)
+        if action == 'get_title':
+            result = yt.title
+
+        elif action == 'get_tags':
+            tags = yt.keywords
+            result = "\n".join([f"{i+1}. {tag}" for i, tag in enumerate(tags)])
+
+        elif action == 'get_hashtags':
+            result = " ".join([f"#{tag.replace(' ', '').lower()}" for tag in yt.keywords])
+
+        else:
+            await update.message.reply_text("❗ Please select an option using /start.")
+            return
+
+        await update.message.reply_text(
+            f"✅ *Result:*\n```{result}```",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📋 Copy", switch_inline_query=result)],
+                [InlineKeyboardButton("🔁 Back to Menu", callback_data='menu')]
+            ])
         )
 
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ Error: {e}")
 
-if __name__ == "__main__":
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+# ✅ Back to Menu
+async def handle_menu_return(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.message.reply_text("🔘 *Choose an option below:*", parse_mode="Markdown", reply_markup=main_menu())
 
-    print("🤖 Bot is running...")
-    app.run_polling()
+
+# ✅ Bot Setup
+app = ApplicationBuilder().token(BOT_TOKEN).build()
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CallbackQueryHandler(handle_menu_return, pattern='menu'))
+app.add_handler(CallbackQueryHandler(handle_button))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+app.run_polling()
