@@ -1,7 +1,9 @@
 import os
+import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
 from pytube import YouTube
+from pytube.exceptions import RegexMatchError
 from dotenv import load_dotenv
 
 # Load env vars
@@ -68,30 +70,44 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['action'] = query.data
     await query.edit_message_text("📩 Please send the YouTube video link:")
 
-# 📩 Handle Link
+# 📩 Handle Link (UPDATED)
 async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not await is_subscriber(user_id, context):
         await update.message.reply_text("🚫 Please join our channel first: https://t.me/" + CHANNEL_USERNAME)
         return
 
-    link = update.message.text
+    link = update.message.text.strip()
+    print(f"[DEBUG] Received YouTube link: {link}")  # Debug print
+
+    # Validate YouTube URL
+    YOUTUBE_REGEX = r"^(https?://)?(www\.)?(youtube\.com/watch\?v=|youtu\.be/)[\w\-]+(&.*)?$"
+    if not re.match(YOUTUBE_REGEX, link):
+        await update.message.reply_text("❗ দয়া করে সঠিক YouTube ভিডিও লিঙ্ক দিন।")
+        return
+
     action = context.user_data.get('action')
+    if not action:
+        await update.message.reply_text("❗ প্রথমে /start দিয়ে অপশন সিলেক্ট করুন।")
+        return
 
     try:
         yt = YouTube(link)
 
         if action == 'get_title':
-            result = f"{yt.title}"
+            result = yt.title
 
         elif action == 'get_tags':
-            result = ', '.join(yt.keywords)
+            # YouTube keywords list can be empty
+            result = ', '.join(yt.keywords) if yt.keywords else "No tags found."
 
         elif action == 'get_hashtags':
-            result = ' '.join([f"#{tag.replace(' ', '').lower()}" for tag in yt.keywords])
-
+            if yt.keywords:
+                result = ' '.join([f"#{tag.replace(' ', '').lower()}" for tag in yt.keywords])
+            else:
+                result = "No hashtags found."
         else:
-            await update.message.reply_text("❗ Please select an option first using /start.")
+            await update.message.reply_text("❗ অজানা অপশন, আবার চেষ্টা করুন।")
             return
 
         # Result + Copy + Menu
@@ -106,8 +122,10 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=reply_markup
         )
 
+    except RegexMatchError:
+        await update.message.reply_text("❗ এই লিঙ্কটি একটি বৈধ ইউটিউব ভিডিও নয় বা ভিডিওটি পাওয়া যায়নি।")
     except Exception as e:
-        await update.message.reply_text(f"⚠️ Error: {e}")
+        await update.message.reply_text(f"⚠️ এরর: {e}")
 
 # 🔁 Menu Again
 async def handle_menu_reload(update: Update, context: ContextTypes.DEFAULT_TYPE):
