@@ -1,3 +1,5 @@
+import logging
+logging.basicConfig(level=logging.DEBUG)
 import os
 from dotenv import load_dotenv
 import openai
@@ -75,3 +77,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
