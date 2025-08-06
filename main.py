@@ -1,136 +1,157 @@
 import os
-from dotenv import load_dotenv
-from pytube import YouTube
+import re
+from urllib.parse import urlparse, parse_qs
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler,
-    CallbackQueryHandler, ContextTypes, filters
-)
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
+from yt_dlp import YoutubeDL
+from dotenv import load_dotenv
 
+# Load env vars
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME")
+CHANNEL_USERNAME = "SL_TooL_HuB"  # Without '@'
 
+# 🔘 SEO Menu
+def get_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎬 Get Title", callback_data='get_title')],
+        [InlineKeyboardButton("🏷️ Get Tags", callback_data='get_tags')],
+        [InlineKeyboardButton("#️⃣ Get Hashtags", callback_data='get_hashtags')]
+    ])
 
-# ✅ Channel Verification
+# 🔐 Channel Check
 async def is_subscriber(user_id, context):
     try:
         member = await context.bot.get_chat_member(chat_id=f"@{CHANNEL_USERNAME}", user_id=user_id)
-        return member.status in ["member", "creator", "administrator"]
-    except:
+        return member.status in ["member", "administrator", "creator"]
+    except Exception as e:
+        print(f"[DEBUG] Channel check failed: {e}")
         return False
 
-
-# ✅ Menu
-def main_menu():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📌 Title", callback_data='get_title')],
-        [InlineKeyboardButton("🏷️ Tags", callback_data='get_tags')],
-        [InlineKeyboardButton("🔖 Hashtags", callback_data='get_hashtags')],
-        [InlineKeyboardButton("🎯 Topic Ideas", callback_data='get_topics')]
-    ])
-
-
-# ✅ Start
+# 🚀 Start Command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+
     if not await is_subscriber(user_id, context):
-        btn = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔐 Join Channel", url=f"https://t.me/{CHANNEL_USERNAME}")]
+        join_btn = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔐 Join Channel", url=f"https://t.me/{CHANNEL_USERNAME}")],
+            [InlineKeyboardButton("✅ I've Joined", callback_data='check_join')]
         ])
-        await update.message.reply_text(
-            "🔒 Access Denied!\n\nJoin our channel to use this premium bot.",
-            reply_markup=btn
-        )
+        await update.message.reply_text("🚫 You must join our premium channel to use this bot:", reply_markup=join_btn)
         return
 
     await update.message.reply_text(
-        "🥇 *Welcome to Premium YouTube Tool Bot!*\n\nChoose a feature below 👇",
-        parse_mode="Markdown",
-        reply_markup=main_menu()
+        "👋 Welcome to *YouTube SEO Bot!*\n\n🔍 Just send a video link and select an option below:",
+        reply_markup=get_menu(),
+        parse_mode='Markdown'
     )
 
-
-# ✅ Button Handler
-async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ✅ Re-check Channel Join
+async def check_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
     query = update.callback_query
     await query.answer()
-    context.user_data['action'] = query.data
-    if query.data == "get_topics":
-        await query.message.reply_text("🧠 Send a keyword or phrase to get topic ideas...")
+
+    if not await is_subscriber(user_id, context):
+        await query.edit_message_text("🚫 You are still not a member. Please join first: https://t.me/" + CHANNEL_USERNAME)
     else:
-        await query.message.reply_text("📥 Send the YouTube link...")
+        await query.edit_message_text("✅ You're verified!\n\nPlease send a YouTube video link:")
+        context.user_data['joined'] = True
 
+# 🔘 Button Press
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
 
-# ✅ Handle Text
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = query.from_user.id
+    if not await is_subscriber(user_id, context):
+        await query.edit_message_text("🚫 Please join our channel first: https://t.me/" + CHANNEL_USERNAME)
+        return
+
+    context.user_data['action'] = query.data
+    await query.edit_message_text("📩 Please send the YouTube video link:")
+
+# ইউটিউব URL পরিষ্কার করার ফাংশন
+def clean_youtube_url(url):
+    parsed = urlparse(url)
+    qs = parse_qs(parsed.query)
+    video_id = qs.get('v')
+    if video_id:
+        return f"https://www.youtube.com/watch?v={video_id[0]}"
+    if parsed.netloc == 'youtu.be':
+        video_id = parsed.path.lstrip('/')
+        if video_id:
+            return f"https://www.youtube.com/watch?v={video_id}"
+    return url
+
+# 📩 Handle Link using yt-dlp
+async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not await is_subscriber(user_id, context):
-        await update.message.reply_text("🚫 Join our channel first: https://t.me/" + CHANNEL_USERNAME)
+        await update.message.reply_text("🚫 Please join our channel first: https://t.me/" + CHANNEL_USERNAME)
         return
+
+    link = update.message.text.strip()
+    print(f"[DEBUG] Raw user link: {link}")
+
+    link = clean_youtube_url(link)
+    print(f"[DEBUG] Cleaned link: {link}")
 
     action = context.user_data.get('action')
-    msg = update.message.text
-
-    # Topic Ideas Section
-    if action == 'get_topics':
-        topics = [
-            f"{msg} tutorial for beginners",
-            f"{msg} explained in detail",
-            f"{msg} tips and tricks",
-            f"how to master {msg}",
-            f"{msg} 2025 trending guide"
-        ]
-        await update.message.reply_text(
-            "📊 *Topic Ideas:*\n" + "\n".join([f"• {t}" for t in topics]),
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔁 Back to Menu", callback_data='menu')]
-            ])
-        )
+    if not action:
+        await update.message.reply_text("❗ প্রথমে /start দিয়ে অপশন সিলেক্ট করুন।")
         return
 
-    # YouTube Link Result Section
     try:
-        yt = YouTube(msg)
+        ydl_opts = {"quiet": True}
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(link, download=False)
+
         if action == 'get_title':
-            result = yt.title
+            result = info.get("title", "Title not found.")
 
         elif action == 'get_tags':
-            tags = yt.keywords
-            result = "\n".join([f"{i+1}. {tag}" for i, tag in enumerate(tags)])
+            tags = info.get("tags", [])
+            result = ', '.join(tags) if tags else "No tags found."
 
         elif action == 'get_hashtags':
-            result = " ".join([f"#{tag.replace(' ', '').lower()}" for tag in yt.keywords])
+            tags = info.get("tags", [])
+            result = ' '.join([f"#{tag.replace(' ', '').lower()}" for tag in tags]) if tags else "No hashtags found."
 
         else:
-            await update.message.reply_text("❗ Please select an option using /start.")
+            await update.message.reply_text("❗ Invalid action.")
             return
+
+        reply_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📋 Copy", switch_inline_query=result)],
+            [InlineKeyboardButton("🔁 Back to Menu", callback_data='menu')]
+        ])
 
         await update.message.reply_text(
             f"✅ *Result:*\n```{result}```",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("📋 Copy", switch_inline_query=result)],
-                [InlineKeyboardButton("🔁 Back to Menu", callback_data='menu')]
-            ])
+            parse_mode='Markdown',
+            reply_markup=reply_markup
         )
 
     except Exception as e:
-        await update.message.reply_text(f"⚠️ Error: {e}")
+        print(f"[DEBUG] yt-dlp error: {e}")
+        await update.message.reply_text(f"⚠️ Error while processing video: {e}")
 
-
-# ✅ Back to Menu
-async def handle_menu_return(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# 🔁 Menu Again
+async def handle_menu_reload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await query.message.reply_text("🔘 *Choose an option below:*", parse_mode="Markdown", reply_markup=main_menu())
+    context.user_data.clear()
+    await query.edit_message_text("🔘 Please select an option:", reply_markup=get_menu())
 
-
-# ✅ Bot Setup
+# Run Bot
 app = ApplicationBuilder().token(BOT_TOKEN).build()
+
 app.add_handler(CommandHandler("start", start))
-app.add_handler(CallbackQueryHandler(handle_menu_return, pattern='menu'))
-app.add_handler(CallbackQueryHandler(handle_button))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+app.add_handler(CallbackQueryHandler(button_handler, pattern="^(get_title|get_tags|get_hashtags)$"))
+app.add_handler(CallbackQueryHandler(handle_menu_reload, pattern="^menu$"))
+app.add_handler(CallbackQueryHandler(check_join, pattern="^check_join$"))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
+
+print("🤖 Bot is running...")
 app.run_polling()
