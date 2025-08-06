@@ -1,5 +1,6 @@
 import os
 import re
+from urllib.parse import urlparse, parse_qs
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
 from pytube import YouTube
@@ -24,7 +25,8 @@ async def is_subscriber(user_id, context):
     try:
         member = await context.bot.get_chat_member(chat_id=f"@{CHANNEL_USERNAME}", user_id=user_id)
         return member.status in ["member", "administrator", "creator"]
-    except:
+    except Exception as e:
+        print(f"[DEBUG] Channel check failed: {e}")
         return False
 
 # 🚀 Start Command
@@ -70,6 +72,20 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['action'] = query.data
     await query.edit_message_text("📩 Please send the YouTube video link:")
 
+# ইউটিউব URL পরিষ্কার করার ফাংশন
+def clean_youtube_url(url):
+    parsed = urlparse(url)
+    qs = parse_qs(parsed.query)
+    video_id = qs.get('v')
+    if video_id:
+        return f"https://www.youtube.com/watch?v={video_id[0]}"
+    # যদি youtu.be লিঙ্ক হয় তাহলে সেটাও হ্যান্ডেল করতে চাইলে এখানে কোড বাড়াতে হবে
+    if parsed.netloc == 'youtu.be':
+        video_id = parsed.path.lstrip('/')
+        if video_id:
+            return f"https://www.youtube.com/watch?v={video_id}"
+    return url  # অন্য কোনো ক্ষেত্রে আসল লিঙ্ক রিটার্ন করো
+
 # 📩 Handle Link (UPDATED)
 async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -78,12 +94,16 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     link = update.message.text.strip()
-    print(f"[DEBUG] Received YouTube link: {link}")  # Debug print
+    print(f"[DEBUG] Raw user link: {link}")
 
-    # Validate YouTube URL
-    YOUTUBE_REGEX = r"^(https?://)?(www\.)?(youtube\.com/watch\?v=|youtu\.be/)[\w\-]+(&.*)?$"
+    # লিঙ্ক পরিষ্কার করে নাও
+    link = clean_youtube_url(link)
+    print(f"[DEBUG] Cleaned link: {link}")
+
+    # Validate YouTube URL (basic check)
+    YOUTUBE_REGEX = r"^(https?://)?(www\.)?youtube\.com/watch\?v=[\w\-]+$"
     if not re.match(YOUTUBE_REGEX, link):
-        await update.message.reply_text("❗ দয়া করে সঠিক YouTube ভিডিও লিঙ্ক দিন।")
+        await update.message.reply_text("❗ দয়া করে সঠিক YouTube ভিডিও লিঙ্ক দিন (যেমন https://www.youtube.com/watch?v=VIDEO_ID)।")
         return
 
     action = context.user_data.get('action')
@@ -98,7 +118,6 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
             result = yt.title
 
         elif action == 'get_tags':
-            # YouTube keywords list can be empty
             result = ', '.join(yt.keywords) if yt.keywords else "No tags found."
 
         elif action == 'get_hashtags':
@@ -125,6 +144,7 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except RegexMatchError:
         await update.message.reply_text("❗ এই লিঙ্কটি একটি বৈধ ইউটিউব ভিডিও নয় বা ভিডিওটি পাওয়া যায়নি।")
     except Exception as e:
+        print(f"[DEBUG] Exception: {e}")
         await update.message.reply_text(f"⚠️ এরর: {e}")
 
 # 🔁 Menu Again
