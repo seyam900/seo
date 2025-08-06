@@ -3,8 +3,7 @@ import re
 from urllib.parse import urlparse, parse_qs
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
-from pytube import YouTube
-from pytube.exceptions import RegexMatchError
+from yt_dlp import YoutubeDL
 from dotenv import load_dotenv
 
 # Load env vars
@@ -79,14 +78,13 @@ def clean_youtube_url(url):
     video_id = qs.get('v')
     if video_id:
         return f"https://www.youtube.com/watch?v={video_id[0]}"
-    # যদি youtu.be লিঙ্ক হয় তাহলে সেটাও হ্যান্ডেল করতে চাইলে এখানে কোড বাড়াতে হবে
     if parsed.netloc == 'youtu.be':
         video_id = parsed.path.lstrip('/')
         if video_id:
             return f"https://www.youtube.com/watch?v={video_id}"
-    return url  # অন্য কোনো ক্ষেত্রে আসল লিঙ্ক রিটার্ন করো
+    return url
 
-# 📩 Handle Link (UPDATED)
+# 📩 Handle Link using yt-dlp
 async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not await is_subscriber(user_id, context):
@@ -96,15 +94,8 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     link = update.message.text.strip()
     print(f"[DEBUG] Raw user link: {link}")
 
-    # লিঙ্ক পরিষ্কার করে নাও
     link = clean_youtube_url(link)
     print(f"[DEBUG] Cleaned link: {link}")
-
-    # Validate YouTube URL (basic check)
-    YOUTUBE_REGEX = r"^(https?://)?(www\.)?youtube\.com/watch\?v=[\w\-]+$"
-    if not re.match(YOUTUBE_REGEX, link):
-        await update.message.reply_text("❗ দয়া করে সঠিক YouTube ভিডিও লিঙ্ক দিন (যেমন https://www.youtube.com/watch?v=VIDEO_ID)।")
-        return
 
     action = context.user_data.get('action')
     if not action:
@@ -112,24 +103,25 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        yt = YouTube(link)
+        ydl_opts = {"quiet": True}
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(link, download=False)
 
         if action == 'get_title':
-            result = yt.title
+            result = info.get("title", "Title not found.")
 
         elif action == 'get_tags':
-            result = ', '.join(yt.keywords) if yt.keywords else "No tags found."
+            tags = info.get("tags", [])
+            result = ', '.join(tags) if tags else "No tags found."
 
         elif action == 'get_hashtags':
-            if yt.keywords:
-                result = ' '.join([f"#{tag.replace(' ', '').lower()}" for tag in yt.keywords])
-            else:
-                result = "No hashtags found."
+            tags = info.get("tags", [])
+            result = ' '.join([f"#{tag.replace(' ', '').lower()}" for tag in tags]) if tags else "No hashtags found."
+
         else:
-            await update.message.reply_text("❗ অজানা অপশন, আবার চেষ্টা করুন।")
+            await update.message.reply_text("❗ Invalid action.")
             return
 
-        # Result + Copy + Menu
         reply_markup = InlineKeyboardMarkup([
             [InlineKeyboardButton("📋 Copy", switch_inline_query=result)],
             [InlineKeyboardButton("🔁 Back to Menu", callback_data='menu')]
@@ -141,11 +133,9 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=reply_markup
         )
 
-    except RegexMatchError:
-        await update.message.reply_text("❗ এই লিঙ্কটি একটি বৈধ ইউটিউব ভিডিও নয় বা ভিডিওটি পাওয়া যায়নি।")
     except Exception as e:
-        print(f"[DEBUG] Exception: {e}")
-        await update.message.reply_text(f"⚠️ এরর: {e}")
+        print(f"[DEBUG] yt-dlp error: {e}")
+        await update.message.reply_text(f"⚠️ Error while processing video: {e}")
 
 # 🔁 Menu Again
 async def handle_menu_reload(update: Update, context: ContextTypes.DEFAULT_TYPE):
